@@ -55,22 +55,40 @@ Common targets: `windows/amd64`, `linux/amd64`, `darwin/arm64` (Apple Silicon), 
 
 ## Setup
 
+The tool needs access to GitHub and to Jira.
+
+**GitHub:** no token to set. The tool runs `gh auth token`, so log in once with `gh auth login`
+(for GitHub Enterprise, log in to that host and pass `-github-host your.host`).
+
+**Jira:** configured with environment variables. Which ones you need depends on your Jira:
+
+| Variable         | Jira Cloud (`*.atlassian.net`)                                                                | Jira Server / Data Center                |
+|------------------|-----------------------------------------------------------------------------------------------|------------------------------------------|
+| `JIRA_URL`       | required                                                                                      | required                                 |
+| `JIRA_API_TOKEN` | required: an [API token](https://id.atlassian.com/manage-profile/security/api-tokens)         | required: a personal access token        |
+| `JIRA_EMAIL`     | required: the email of the account that owns the token                                        | **must not be set**                      |
+
+`JIRA_EMAIL` decides how the token is sent: if it is set, the tool uses basic auth
+(email + API token, as Jira Cloud expects); if it is unset, it sends the token as a bearer
+token (as Server/DC personal access tokens expect). `JIRA_URL` and `JIRA_EMAIL` can also be
+given as the `-jira-url` / `-jira-email` flags; the token can only come from the environment.
+
 Bash / zsh:
 
 ```sh
-gh auth login                       # GitHub token is read via `gh auth token`
+gh auth login
 export JIRA_URL=https://yourcompany.atlassian.net
-export JIRA_API_TOKEN=...           # Cloud: API token; Server/DC: personal access token
-export JIRA_EMAIL=you@company.com   # Cloud only
+export JIRA_API_TOKEN=...
+export JIRA_EMAIL=you@company.com   # omit for Server/DC
 ```
 
 PowerShell:
 
 ```powershell
-gh auth login                                        # GitHub token is read via `gh auth token`
+gh auth login
 $env:JIRA_URL = "https://yourcompany.atlassian.net"
-$env:JIRA_API_TOKEN = "..."                          # Cloud: API token; Server/DC: personal access token
-$env:JIRA_EMAIL = "you@company.com"                  # Cloud only
+$env:JIRA_API_TOKEN = "..."
+$env:JIRA_EMAIL = "you@company.com"   # omit for Server/DC
 ```
 
 `$env:` variables last for the current session only. To keep them for your user account, use
