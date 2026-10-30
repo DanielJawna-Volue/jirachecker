@@ -17,7 +17,13 @@ import (
 const usage = `jirachecker finds GitHub feature branches whose Jira issues are closed.
 
 Usage:
-  jirachecker list <owner/repo> [flags]
+  jirachecker list  <owner/repo> [flags]                  report on one repository
+  jirachecker multi <owner/repo> <owner/repo>... [flags]  report on several repositories
+
+Examples:
+  jirachecker list  volue/api
+  jirachecker multi volue/api volue/web volue/worker
+  jirachecker multi volue/api,volue/web -all
 
 Environment:
   JIRA_URL        Jira base URL, e.g. https://yourcompany.atlassian.net
@@ -25,7 +31,7 @@ Environment:
   JIRA_EMAIL      Jira Cloud account email (leave unset for a Server/DC token)
 
 The GitHub token is taken from the gh CLI (gh auth token).
-Run 'jirachecker list -h' for the list flags.
+Run 'jirachecker list -h' or 'jirachecker multi -h' for the flags.
 `
 
 func main() {
@@ -36,6 +42,8 @@ func main() {
 	switch os.Args[1] {
 	case "list":
 		os.Exit(runList(os.Args[2:]))
+	case "multi":
+		os.Exit(runMulti(os.Args[2:]))
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
@@ -45,7 +53,6 @@ func main() {
 }
 
 type listOptions struct {
-	repo       string
 	prefixes   string
 	showAll    bool
 	jiraURL    string
@@ -53,19 +60,26 @@ type listOptions struct {
 	githubHost string
 }
 
-func runList(args []string) int {
-	var o listOptions
-	fs := flag.NewFlagSet("list", flag.ContinueOnError)
+// newFlagSet returns the flags shared by the list and multi commands.
+func newFlagSet(name, usageLine, examples string, o *listOptions) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.StringVar(&o.prefixes, "prefixes", strings.Join(branches.DefaultPrefixes, ","), "comma separated branch prefixes to consider")
 	fs.BoolVar(&o.showAll, "all", false, "also show feature branches that are not deletable, with the reason")
 	fs.StringVar(&o.jiraURL, "jira-url", os.Getenv("JIRA_URL"), "Jira base URL (env JIRA_URL)")
 	fs.StringVar(&o.jiraEmail, "jira-email", os.Getenv("JIRA_EMAIL"), "Jira Cloud account email (env JIRA_EMAIL)")
 	fs.StringVar(&o.githubHost, "github-host", "github.com", "gh host to take the token from")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: jirachecker list <owner/repo> [flags]")
+		fmt.Fprintln(fs.Output(), "Usage: "+usageLine)
+		fmt.Fprintln(fs.Output(), "\nExamples:\n"+examples+"\nFlags:")
 		fs.PrintDefaults()
 	}
+	return fs
+}
 
+func runList(args []string) int {
+	var o listOptions
+	fs := newFlagSet("list", "jirachecker list <owner/repo> [flags]",
+		"  jirachecker list volue/api\n  jirachecker list volue/api -all\n", &o)
 	positional, err := parseInterspersed(fs, args)
 	if err != nil {
 		return 2
@@ -74,10 +88,71 @@ func runList(args []string) int {
 		fs.Usage()
 		return 2
 	}
-	o.repo = positional[0]
 
-	if err := list(o); err != nil {
+	gh, jc, err := connect(o)
+	if err == nil {
+		_, err = scanRepo(gh, jc, positional[0], o)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	return 0
+}
+
+func runMulti(args []string) int {
+	var o listOptions
+	fs := newFlagSet("multi", "jirachecker multi <owner/repo> <owner/repo>... [flags]\n\n"+
+		"Repositories are separated by spaces and/or commas. A repository that fails\n"+
+		"(not found, no access) is reported and the others are still scanned.",
+		"  jirachecker multi volue/api volue/web volue/worker\n"+
+			"  jirachecker multi volue/api,volue/web,volue/worker\n"+
+			"  jirachecker multi volue/api volue/web -all -prefixes feat,fix\n", &o)
+	positional, err := parseInterspersed(fs, args)
+	if err != nil {
+		return 2
+	}
+	var repos []string
+	seen := map[string]bool{}
+	for _, arg := range positional {
+		for _, r := range strings.Split(arg, ",") {
+			if r = strings.TrimSpace(r); r != "" && !seen[strings.ToLower(r)] {
+				seen[strings.ToLower(r)] = true
+				repos = append(repos, r)
+			}
+		}
+	}
+	if len(repos) == 0 {
+		fs.Usage()
+		return 2
+	}
+
+	gh, jc, err := connect(o)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+
+	var summary [][2]string
+	failed := 0
+	for i, r := range repos {
+		if i > 0 {
+			fmt.Println()
+		}
+		fmt.Printf("=== %s ===\n", r)
+		n, err := scanRepo(gh, jc, r, o)
+		if err != nil {
+			failed++
+			fmt.Fprintln(os.Stderr, "error:", err)
+			summary = append(summary, [2]string{r, "error: " + err.Error()})
+			continue
+		}
+		summary = append(summary, [2]string{r, fmt.Sprint(n)})
+	}
+
+	fmt.Printf("\nSummary (%d repositories):\n", len(repos))
+	printTable(summary, "REPOSITORY", "DELETABLE")
+	if failed > 0 {
 		return 1
 	}
 	return 0
@@ -99,33 +174,36 @@ func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
 	}
 }
 
-func list(o listOptions) error {
+// connect creates the GitHub and Jira clients and checks the Jira credentials.
+func connect(o listOptions) (*github.Client, *jira.Client, error) {
 	jiraToken := os.Getenv("JIRA_API_TOKEN")
 	if o.jiraURL == "" || jiraToken == "" {
-		return fmt.Errorf("Jira is not configured: set JIRA_URL (or -jira-url) and JIRA_API_TOKEN, plus JIRA_EMAIL for Jira Cloud")
-	}
-
-	repoName, err := github.ParseRepo(o.repo)
-	if err != nil {
-		return err
+		return nil, nil, fmt.Errorf("Jira is not configured: set JIRA_URL (or -jira-url) and JIRA_API_TOKEN, plus JIRA_EMAIL for Jira Cloud")
 	}
 	token, err := github.Token(o.githubHost)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	gh := github.NewClient(token)
-	repo, err := gh.GetRepo(repoName)
-	if err != nil {
-		return err
-	}
-
 	jc := jira.NewClient(o.jiraURL, jiraToken, o.jiraEmail)
 	jiraUser, err := jc.Verify()
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	fmt.Printf("Repository: %s (default branch: %s)\n", repo.FullName, repo.DefaultBranch)
-	fmt.Printf("Jira:       %s as %s\n\n", o.jiraURL, jiraUser)
+	fmt.Printf("Jira:       %s as %s\n", o.jiraURL, jiraUser)
+	return github.NewClient(token), jc, nil
+}
+
+// scanRepo prints the report for one repository and returns the number of deletable branches.
+func scanRepo(gh *github.Client, jc *jira.Client, repoArg string, o listOptions) (int, error) {
+	repoName, err := github.ParseRepo(repoArg)
+	if err != nil {
+		return 0, err
+	}
+	repo, err := gh.GetRepo(repoName)
+	if err != nil {
+		return 0, err
+	}
+	fmt.Printf("Repository: %s (default branch: %s)\n\n", repo.FullName, repo.DefaultBranch)
 
 	var prefixes []string
 	for _, p := range strings.Split(o.prefixes, ",") {
@@ -136,7 +214,7 @@ func list(o listOptions) error {
 
 	all, err := gh.ListBranches(repoName)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var features []*branches.FeatureBranch
 	keySet := map[string]bool{}
@@ -183,7 +261,7 @@ func list(o listOptions) error {
 	}
 	fmt.Printf("\nScanned %d branches, %d feature branches, %d Jira issues; %d deletable.\n",
 		len(all), len(features), len(keys), len(deletable))
-	return nil
+	return len(deletable), nil
 }
 
 // verdict reports whether a branch is deletable: it must reference at least one issue,

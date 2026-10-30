@@ -65,13 +65,28 @@ The tool needs access to GitHub and to Jira.
 | Variable         | Jira Cloud (`*.atlassian.net`)                                                                | Jira Server / Data Center                |
 |------------------|-----------------------------------------------------------------------------------------------|------------------------------------------|
 | `JIRA_URL`       | required                                                                                      | required                                 |
-| `JIRA_API_TOKEN` | required: an [API token](https://id.atlassian.com/manage-profile/security/api-tokens)         | required: a personal access token        |
+| `JIRA_API_TOKEN` | required: an API token without scopes ([how](#creating-the-jira-token))                       | required: a personal access token ([how](#creating-the-jira-token)) |
 | `JIRA_EMAIL`     | required: the email of the account that owns the token                                        | **must not be set**                      |
 
 `JIRA_EMAIL` decides how the token is sent: if it is set, the tool uses basic auth
 (email + API token, as Jira Cloud expects); if it is unset, it sends the token as a bearer
 token (as Server/DC personal access tokens expect). `JIRA_URL` and `JIRA_EMAIL` can also be
 given as the `-jira-url` / `-jira-email` flags; the token can only come from the environment.
+
+### Creating the Jira token
+
+**Jira Cloud:** on the [API tokens page](https://id.atlassian.com/manage-profile/security/api-tokens)
+choose **Create API token** (not *Create API token with scopes*). Give it a name and an expiry,
+then copy the token; it is shown only once. It has the same permissions as your account, and the
+tool only reads your profile and issue statuses.
+
+Scoped tokens are not supported by the tool: Atlassian accepts them only through the
+`https://api.atlassian.com/ex/jira/<cloud-id>` gateway, not through your site URL
+(`https://yourcompany.atlassian.net`) that `JIRA_URL` points to.
+
+**Jira Server / Data Center:** personal access tokens are not created on the Atlassian page above
+but in Jira itself: click your avatar → **Profile** → **Personal Access Tokens** →
+**Create token**.
 
 Bash / zsh:
 
@@ -100,15 +115,25 @@ $env:JIRA_EMAIL = "you@company.com"   # omit for Server/DC
 Bash / zsh:
 
 ```sh
-./jirachecker list owner/repo          # deletable branches
-./jirachecker list owner/repo -all     # also show kept branches and why
+./jirachecker list owner/repo                      # deletable branches
+./jirachecker list owner/repo -all                 # also show kept branches and why
+./jirachecker multi owner/repo1 owner/repo2        # several repositories
+./jirachecker multi owner/repo1,owner/repo2 -all   # commas work too
 ```
 
 PowerShell:
 
 ```powershell
-.\jirachecker.exe list owner/repo      # deletable branches
-.\jirachecker.exe list owner/repo -all # also show kept branches and why
+.\jirachecker.exe list owner/repo                      # deletable branches
+.\jirachecker.exe list owner/repo -all                 # also show kept branches and why
+.\jirachecker.exe multi owner/repo1 owner/repo2        # several repositories
+.\jirachecker.exe multi owner/repo1,owner/repo2 -all   # commas work too
 ```
+
+`multi` prints the same report as `list` for each repository, then a summary table with the
+number of deletable branches per repository. If one repository fails (for example it does not
+exist or you have no access), the error is shown in the summary, the other repositories are still
+scanned, and the exit code is 1. The flags (`-all`, `-prefixes`, …) apply to every repository.
+Run `jirachecker list -h` or `jirachecker multi -h` for all flags.
 
 Deleting branches is not implemented yet.
