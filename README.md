@@ -137,3 +137,12 @@ scanned, and the exit code is 1. The flags (`-all`, `-prefixes`, …) apply to e
 Run `jirachecker list -h` or `jirachecker multi -h` for all flags.
 
 Deleting branches is not implemented yet.
+
+## AI-assisted development
+
+This project has been, and will continue to be, developed with AI-assisted code generation.
+Review the code yourself before relying on it.
+
+## License
+
+[MIT](LICENSE)
