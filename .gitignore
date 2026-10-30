@@ -5,6 +5,7 @@
 *.so
 *.dylib
 /jirachecker
+/jirachecker-*
 
 # Test binaries and coverage
 *.test
